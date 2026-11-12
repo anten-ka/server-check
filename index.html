@@ -13,9 +13,9 @@
 # static build of a pinned release, checked by its SHA-256; Speedtest by Ookla — the official CLI of a pinned version,
 # checked the same way; sysbench and fio — «apt-get download» of the signed distribution packages, unpacked by «dpkg-deb
 # -x» (Debian/Ubuntu with package lists only). Network tools run as «nobody» when the check runs as root. The IP of the
-# server is never printed. Scores 0–1000 are the scale of Kaskad (lib/kaskad/score_abs.py, abs-0.5-k1): the same curves,
-# anchors, weights and group means; no total and no verdicts (owner 23.10 / 27.10). With sysbench / fio — the exact
-# methods of Kaskad (lib/kaskad/bench/suite.py); without them built-in ones (openssl, dd, /dev/shm, getent) — «≈».
+# server is never printed. Scores 0–1000 — the scale of Kaskad (score_abs.py abs-0.5-k1) but the network channel above
+# 1 Gbit/s: own curve to 1000 at 10 Gbit/s, lower than the Kaskad panel (abs-0.5-k1+net10g), no verdicts. sysbench /
+# fio — the methods of Kaskad (lib/kaskad/bench/suite.py); without them built-in ones (openssl, dd, getent …) — «≈».
 # The speed: iperf3 to the public points of Russian operators and of Europe, download and upload; the HTTP download of
 # the old versions only when iperf3 is unavailable. Environment: SC_LANG=ru|en, SC_FULL=1, SC_ALL=1, SC_JSON=1,
 # SC_NO_NET=1, SC_NO_FETCH=1 (fetch nothing), SC_NO_IPERF=1, SC_NO_SPEEDTEST=1, SC_NET_BUDGET_GB=N (the traffic of
@@ -32,12 +32,14 @@ if [ -z "${BASH_VERSION:-}" ]; then
 fi
 
 sc_init() {
-    SC_VERSION="1.1"
-    SC_SCALE_VERSION="abs-0.5-k1"
+    SC_VERSION="1.2"
+    SC_SCALE_VERSION="abs-0.5-k1+net10g"          # Kaskad abs-0.5-k1 + the network curve of bench above 1 Gbit/s
     # = lib/kaskad/score_abs.py GROUPS (abs-0.5-k1), a test a line: id better weight anchors 100/500/700/900 [key=value];
-    # test.sh checks it against score_abs.py field by field.
-    SC_SCALE='net_down higher 1 30 300 600 1500 floor=0.01 quick_cap=700
-net_up higher 1 20 200 500 1200 floor=0.01 quick_cap=700
+    # test.sh checks it against score_abs.py field by field. One key is not of Kaskad (parity.py names it): ext_from=F
+    # ext_top=T — above F the score goes on log-linearly from the score of F to 1000 at T (bench 1.2, owner 12.11: the
+    # curve of Kaskad nears 1000 from 1.5 Gbit/s on, 5 and 10 Gbit/s look the same); below F it is the curve of Kaskad.
+    SC_SCALE='net_down higher 1 30 300 600 1500 floor=0.01 quick_cap=700 ext_from=1000 ext_top=10000
+net_up higher 1 20 200 500 1200 floor=0.01 quick_cap=700 ext_from=1000 ext_top=10000
 rtt lower 1 120 25 10 3 floor=0.05
 loss lower 1.5 5 0.5 0.1 0.01 floor=0.005 per_sample=1 min_n=10000
 jitter lower 1 30 3 1 0.3 floor=0.05 min_n=1000
@@ -121,6 +123,20 @@ tyo-leaseweb|l|asia|Tokyo|Токио|Leaseweb|Leaseweb|speedtest.tyo11.jp.leasew
     # SC_NET_BUDGET_GB=N changes it, 0 — none). A run is capped (-b) so that the runs after it still fit at 1 Gbit/s
     # (sc_net_cap_check); all of them at 1 Gbit/s fit every budget: 6 × 0.625, 26 × 0.875, 58 × 0.875 GB.
     SC_NET_CAPMBIT=1000
+    # A fast port (bench 1.2, owner 12.11): the first download (sc_port_set) is a short probe, held by the ceiling only;
+    # above SC_NET_FASTMBIT the runs get shorter (SC_IPERF_FAST: «T O» seconds, as the probe) and the budget of the mode
+    # grows with the port and the shorter runs (sc_port_set), at most SC_NET_CEIL GB of the mode (quick, --full, --all):
+    # 3-s runs at 10 Gbit/s take 3.75 GB each, 6 / 26 / 58 of them 22.5 / 97.5 / 217.5 GB. SC_NET_BUDGET_GB stays as set.
+    # 2 s after 1 s omitted (12.11, the stand of ≈ 4–6 Gbit/s, 8 streams, Moscow / Frankfurt / Krasnoyarsk / New York,
+    # both ways): within 0–14 % of the 5-s run after 2 s, median 6 %, 7 of 10 within 10 % (the Frankfurt download left
+    # out: its 5-s run itself fell from 6.2 to 3.3 Gbit/s); two 2-s runs in a row differ by 3–7 %; every second of a 2-s
+    # run is already at speed, New York (≈ 120 ms) too. Not farther: 13.11 Los Angeles (176 ms) read 4–15 % below the
+    # 5-s run, Singapore (314 ms) half — a point with a ping above SC_NET_FARMS keeps the usual length (REV-BENCH-4 N4).
+    # The class only grows (N1): a run faster than its class raises it, and the budget with it (sc_port_raise).
+    SC_NET_FASTMBIT=1200
+    SC_IPERF_FAST="2 1"
+    SC_NET_CEIL="15 100 200"
+    SC_NET_FARMS=150
     # The tools fetched into the temporary directory: tool|arch (uname -m, i?86 -> i686, armv*l -> armv7l)|url|sha256.
     # iperf3 — the static builds of github.com/userdocs/iperf3-static 3.22 (the digests of the release, checked by a
     # download 12.11); Speedtest — the official CLI 1.2.0 of Ookla (the digests of the downloads 12.11). A file that does
@@ -406,14 +422,21 @@ sc_jitter() {
 
 # ── the scale of Kaskad ─────────────────────────────────────────────────────────────────────────────────────────────
 
-# sc_score TEST VALUE [N] -> REPLY: the score 0–1000, a float (score_abs.test_score / score_of): a logistic curve through
-# the anchors 100/500/700/900 in (ln x, logit s), the ends extend the outer segments; the floor, clamp_max, quick_cap
-# of a quick check, «0 of n» = 100/n % for loss; fewer samples than min_n (N given) — "".
+# sc_score TEST VALUE [N] [MODE] -> REPLY: the score 0–1000, a float (score_abs.test_score / score_of): a logistic
+# curve through the anchors 100/500/700/900 in (ln x, logit s), the ends extend the outer segments; the floor,
+# clamp_max, quick_cap of a quick check (MODE, by default SC_MODE), «0 of n» = 100/n % for loss; fewer samples than
+# min_n (N given) — "". ext_from / ext_top (not of Kaskad): above ext_from — log-linear from its score to 1000 at
+# ext_top, never more than 1000.
 sc_score() {
     REPLY=""
     sc_isnum "${2:-}" || return 0
     REPLY=$(SC_T="$SC_SCALE
-$SC_DERIVED" awk -v t="$1" -v x="$2" -v n="${3:-}" -v mode="$SC_MODE" 'BEGIN {
+$SC_DERIVED" awk -v t="$1" -v x="$2" -v n="${3:-}" -v mode="${4:-$SC_MODE}" '
+    function curve(q,    i) {
+        i = (q <= u[2]) ? 1 : ((q <= u[3]) ? 2 : 3)
+        return 1000 / (1 + exp(-(L[i] + (L[i + 1] - L[i]) * (q - u[i]) / (u[i + 1] - u[i]))))
+    }
+    BEGIN {
         k = split(ENVIRON["SC_T"], rows, "\n")
         for (r = 1; r <= k; r++) {
             m = split(rows[r], f, " ")
@@ -432,8 +455,12 @@ $SC_DERIVED" awk -v t="$1" -v x="$2" -v n="${3:-}" -v mode="$SC_MODE" 'BEGIN {
         A[1] = 100; A[2] = 500; A[3] = 700; A[4] = 900
         for (j = 1; j <= 4; j++) { u[j] = log(a[j]); if (better == "lower") u[j] = -u[j]; L[j] = log(A[j] / (1000 - A[j])) }
         q = log(x); if (better == "lower") q = -q
-        i = (q <= u[2]) ? 1 : ((q <= u[3]) ? 2 : 3)
-        s = 1000 / (1 + exp(-(L[i] + (L[i + 1] - L[i]) * (q - u[i]) / (u[i + 1] - u[i]))))
+        s = curve(q)
+        if (better == "higher" && ("ext_from" in o) && o["ext_from"] + 0 > 0 && o["ext_top"] + 0 > o["ext_from"] + 0 && x > o["ext_from"] + 0) {
+            ef = o["ext_from"] + 0; s = curve(log(ef))
+            s += (1000 - s) * log(x / ef) / log(o["ext_top"] / ef)
+            if (s > 1000) s = 1000
+        }
         if (mode == "quick" && ("quick_cap" in o) && s > o["quick_cap"] + 0) s = o["quick_cap"] + 0
         printf "%.17g\n", s
     }')
@@ -474,13 +501,16 @@ sc_group_score() {
     sc_shown "${GSF[$g]}"; GS[$g]=$REPLY
 }
 
-# sc_set TEST VALUE METHOD [WHY] [APPROX] [N] -> V/SF/SS/M/WHY/AP of the test (a score only with a value)
+# sc_set TEST VALUE METHOD [WHY] [APPROX] [N] -> V/SF/SS/M/WHY/AP of the test (a score only with a value). The quick cap
+# of Kaskad (quick_cap: its quick channel test is a download of at most 250 MB) is not for the iperf3 runs: they are
+# timed runs, the same in the quick check (bench 1.2)
 sc_set() {
-    local t=$1 v=${2:-} n=${6:-}
+    local t=$1 v=${2:-} n=${6:-} mode=$SC_MODE
     V[$t]=""; SF[$t]=""; SS[$t]=""; M[$t]=${3:-}; WHY[$t]=${4:-}; AP[$t]=${5:-0}; NN[$t]=$n
+    [ "${3:-}" = iperf3 ] && mode=full
     if sc_isnum "$v"; then
         V[$t]=$v
-        sc_score "$t" "$v" "$n"; SF[$t]=$REPLY
+        sc_score "$t" "$v" "$n" "$mode"; SF[$t]=$REPLY
         sc_shown "$REPLY"; SS[$t]=$REPLY
         if [ -z "${SF[$t]}" ] && [ -z "${WHY[$t]}" ]; then WHY[$t]="few_samples"; fi
     elif [ -z "${WHY[$t]}" ]; then
@@ -1192,12 +1222,71 @@ sc_parse_iperf() {
         }'
 }
 
-# sc_net_budget_init -> SC_NET_BUDGET (bytes; 0 — no limit) of the mode, SC_NET_BUDGET_GB when it is a number
+# sc_net_budget_init -> SC_NET_BUDGET (bytes; 0 — no limit) of the mode, SC_NET_BUDGET_GB when it is a number (then
+# SC_NET_USERB=1: it stays as set); SC_NET_BASE — the budget of the mode at 1 Gbit/s, SC_NET_CEILB — its ceiling on a
+# fast port; the port not known yet (sc_net_port_reset)
 sc_net_budget_init() {
-    local gb
-    case "$SC_POINTS" in quick) gb=5 ;; long) gb=60 ;; *) gb=30 ;; esac
-    [[ ${SC_NET_BUDGET_GB:-} =~ ^[0-9]{1,6}$ ]] && gb=$((10#$SC_NET_BUDGET_GB))
-    SC_NET_BUDGET=$((gb * 1000000000)); SC_NET_BYTES=0; SC_NET_RCAP=0; SC_NET_NCAP=0
+    local gb ceil
+    read -r -a ceil <<<"$SC_NET_CEIL"
+    case "$SC_POINTS" in quick) gb=5; SC_NET_CEILB=${ceil[0]} ;; long) gb=60; SC_NET_CEILB=${ceil[2]} ;; *) gb=30; SC_NET_CEILB=${ceil[1]} ;; esac
+    SC_NET_BASE=$((gb * 1000000000)); SC_NET_CEILB=$((SC_NET_CEILB * 1000000000)); SC_NET_USERB=0
+    [[ ${SC_NET_BUDGET_GB:-} =~ ^[0-9]{1,6}$ ]] && { gb=$((10#$SC_NET_BUDGET_GB)); SC_NET_USERB=1; }
+    SC_NET_BUDGET0=$((gb * 1000000000))
+    sc_net_port_reset
+}
+
+# sc_net_port_reset — the port not classified, the budget back to the one of the mode (or the user's), nothing counted;
+# SC_NET_PROBE=1 — the next download that answers is the probe of the port (sc_net_iperf sets it)
+sc_net_port_reset() {
+    SC_NET_BUDGET=${SC_NET_BUDGET0:-${SC_NET_BUDGET:-0}}; SC_NET_BYTES=0; SC_NET_RCAP=0; SC_NET_NCAP=0
+    SC_PORT_MBIT=""; SC_PORT_CLASS=""; SC_PORT_FAST=0; SC_PORT_DONE=0; SC_NET_PROBE=0; SC_IPERF_PROBE=0
+    SC_NET_PROBE_B=""; SC_PROBE_MBIT=""; SC_PROBE_ROW=""; SC_NET_FLOOR=""
+}
+
+# sc_port_set MBIT [ROW] — the probe answered MBIT (the sum of its 8 streams; ROW — its row): SC_PROBE_MBIT, and the
+# class of the port by it (sc_port_class). A number that is not plain digits (iperf3 is foreign input) — the port stays
+# unknown, nothing changes. SC_PORT_MBIT — what the port gave at least (the probe; a faster run raises it).
+sc_port_set() {
+    local v=${1:-} m
+    SC_PORT_DONE=1
+    [[ $v =~ ^[0-9]{1,7}([.][0-9]+)?$ ]] || return 0
+    m=$((10#${v%%.*})); [ "$m" -ge 1 ] || m=1
+    SC_PROBE_MBIT=$m; SC_PORT_MBIT=$m; SC_PROBE_ROW=${2:-}
+    sc_port_class "$m"
+    sc_net_floor; SC_NET_FLOOR=$REPLY          # what the runs take at 1 Gbit/s as planned now (a later raise: less)
+}
+# sc_port_raise MBIT — a run that is not the probe gave MBIT: faster than the class of the port (1.2 Gbit/s for the
+# class of 1 Gbit/s) — the class grows by it, the budget with it (REV-BENCH-4 N1: the probe sees one point, often a slow
+# one). The class never drops. Returns 0 when it grew. Plain digits only, as the probe; nothing before the probe.
+sc_port_raise() {
+    local v=${1:-} m t
+    [ -n "${SC_PORT_CLASS:-}" ] || return 1
+    [[ $v =~ ^[0-9]{1,7}([.][0-9]+)?$ ]] || return 1
+    m=$((10#${v%%.*})); t=$SC_PORT_CLASS; [ "$t" -le 1000 ] && t=$SC_NET_FASTMBIT
+    [ "$m" -gt "$t" ] || return 1
+    [ "$m" -gt "${SC_PORT_MBIT:-0}" ] && SC_PORT_MBIT=$m
+    sc_port_class "$m"
+}
+# sc_port_class MBIT — the class of the port: 1000 up to SC_NET_FASTMBIT, else the first of 2500 / 10000 / 25000 /
+# 40000 / 100000 not below MBIT (the scale of the bars); a fast port — shorter runs (SC_PORT_FAST=1) and, with the
+# budget of the mode, that budget × the class / 1000 × the seconds of a short run / the seconds of a usual one (the
+# budget of the mode is for its usual runs at 1 Gbit/s; whole GB up, never below it), at most SC_NET_CEILB: 8 / 33 /
+# 65 GB for the class of 2.5 Gbit/s, the ceiling from 10 Gbit/s on. The class, not MBIT: the probe sees one point, the
+# port may be faster (12.11 on the stand Moscow gave 3.5 Gbit/s, Rostov 8.2 — a budget by 3.5 held the later rows).
+sc_port_class() {
+    local m=$1 b fs ns
+    if [ "$m" -le "$SC_NET_FASTMBIT" ]; then SC_PORT_CLASS=1000; SC_PORT_FAST=0; return 0; fi
+    fs=$(( ${SC_IPERF_FAST% *} + ${SC_IPERF_FAST#* } ))
+    SC_PORT_FAST=0 SC_IPERF_PROBE=0 sc_iperf_len; ns=$(( ${REPLY% *} + ${REPLY#* } ))
+    SC_PORT_FAST=1
+    for SC_PORT_CLASS in 2500 10000 25000 40000 100000; do [ "$m" -le "$SC_PORT_CLASS" ] && break; done
+    if [ "${SC_NET_USERB:-0}" != 1 ] && [ "${SC_NET_BASE:-0}" -gt 0 ]; then
+        b=$((SC_NET_BASE / 1000000000))
+        b=$(( (b * SC_PORT_CLASS * fs + 1000 * ns - 1) / (1000 * ns) )); b=$((b * 1000000000))
+        [ "$b" -gt "$SC_NET_CEILB" ] && b=$SC_NET_CEILB
+        [ "$b" -gt "$SC_NET_BUDGET" ] && SC_NET_BUDGET=$b
+    fi
+    return 0
 }
 
 # sc_net_cap_check I DIR -> SC_NET_RCAP: the cap of the next run, Mbit/s in all (0 — none). With a budget the run may
@@ -1206,20 +1295,50 @@ sc_net_budget_init() {
 # (the near points that give the Канал score) get the most. 100 Gbit/s and more — no cap. 1 % of the budget is kept
 # back: -b holds a run within 0.2 % of its plan (12.11, probes to Moscow and New York: the far one is slow in the
 # omitted seconds and catches up after them, the sum of the run is the plan), and a try that broke off mid-run and is
-# tried again is not planned (one quick run on the stand: 5.02 GB of 5).
+# tried again is not planned (one quick run on the stand: 5.02 GB of 5). The probe of the port: with the budget of the
+# mode it is held only by the ceiling of the mode (its 3 s bound it: rate × time — no cap in effect below ≈ 30 Gbit/s
+# in the quick check, at all in --full / --all); with the user's budget — by that budget; the run of its row at the
+# usual length (a port of 1 Gbit/s) is planned too. The later runs are planned at their own length (before the port is
+# known — the usual one, the longer).
 sc_net_cap_check() {
-    local left secs avail r u=0
+    local secs rsecs avail r bud=${SC_NET_BUDGET:-0}
     SC_NET_RCAP=0
-    [ "${SC_NET_BUDGET:-0}" -gt 0 ] || return 0
-    [ "$2" = up ] && u=1
-    left=$((2 * (SPN - $1) - u)); [ "$left" -ge 1 ] || left=1
-    sc_iperf_len; secs=$((${REPLY% *} + ${REPLY#* }))
-    avail=$((SC_NET_BUDGET - SC_NET_BUDGET / 100 - SC_NET_BYTES - (left - 1) * SC_NET_CAPMBIT * 125000 * secs))
+    [ "$bud" -gt 0 ] || return 0
+    [ "${SC_IPERF_PROBE:-0}" = 1 ] && [ "${SC_NET_USERB:-0}" != 1 ] && [ "${SC_NET_CEILB:-0}" -gt "$bud" ] && bud=$SC_NET_CEILB
+    sc_iperf_len "$1"; secs=$((${REPLY% *} + ${REPLY#* }))
+    sc_net_rest_secs "$1" "$2"; rsecs=$REPLY
+    avail=$((bud - bud / 100 - SC_NET_BYTES - SC_NET_CAPMBIT * 125000 * rsecs))
     r=0; [ "$avail" -gt 0 ] && r=$((avail * 8 / secs / 1000000))
     [ "$r" -lt "$SC_NET_CAPMBIT" ] && r=$SC_NET_CAPMBIT
     [ "$r" -ge 100000 ] && r=0
     SC_NET_RCAP=$r
     return 0
+}
+
+# sc_net_rest_secs I DIR -> REPLY: the seconds (counted + omitted) of the runs of the table after this one, each at the
+# length planned for its row now (sc_iperf_len I); the probe — its row once more at the usual length (a port of 1
+# Gbit/s or a far row runs it again). Before the port is known every run is planned at the usual length, the longer.
+sc_net_rest_secs() {
+    local i=$1 j t=0
+    if [ "$2" = down ]; then SC_IPERF_PROBE=0 sc_iperf_len "$i"; t=$(( ${REPLY% *} + ${REPLY#* } )); fi
+    if [ "${SC_IPERF_PROBE:-0}" = 1 ]; then SC_IPERF_PROBE=0 sc_iperf_len "$i"; t=$(( t + ${REPLY% *} + ${REPLY#* } )); fi
+    for ((j = i + 1; j < SPN; j++)); do SC_IPERF_PROBE=0 sc_iperf_len "$j"; t=$(( t + 2 * (${REPLY% *} + ${REPLY#* }) )); done
+    REPLY=$t
+}
+# sc_net_floor -> REPLY: the bytes of iperf3 at the floor of every run (SC_NET_CAPMBIT, 1 Gbit/s) as planned now — the
+# probe and every run of the table (before the port is known — at the usual length); a budget below it is not kept
+sc_net_floor() {
+    local t n set id sets
+    SC_IPERF_PROBE=1 SC_PORT_FAST=0 sc_iperf_len; t=$(( ${REPLY% *} + ${REPLY#* } ))
+    if [ "${SPN:-0}" -eq 0 ]; then          # before the table: its rows by the set of the mode, the usual length
+        case "$SC_POINTS" in quick) set=q ;; long) set=l ;; *) set=b ;; esac
+        n=0; while IFS='|' read -r id sets _; do [ -n "$id" ] && [ "$sets" != "~" ] && [[ $sets == *"$set"* ]] && n=$((n + 1)); done <<<"$SC_IPERF_POINTS"
+        SC_PORT_FAST=0 sc_iperf_len; REPLY=$(( (t + 2 * n * (${REPLY% *} + ${REPLY#* })) * SC_NET_CAPMBIT * 125000 )); return 0
+    fi
+    if [ "${SC_PORT_DONE:-0}" = 1 ] && [ "${SC_PORT_FAST:-0}" = 1 ] && [ -n "${SC_PROBE_ROW:-}" ] && ! sc_iperf_far "$SC_PROBE_ROW"; then
+        t=0          # on a fast port the probe is the download of its row
+    fi
+    SC_IPERF_PROBE=0 sc_net_rest_secs -1 up; REPLY=$(( (t + REPLY) * SC_NET_CAPMBIT * 125000 ))
 }
 
 # sc_net_count BYTES — the traffic of a run added (SC_NET_BYTES)
@@ -1239,15 +1358,32 @@ sc_parse_iperf_bytes() {
         END { printf "%.0f\n", b + 0 }'
 }
 
-# sc_iperf_len -> REPLY «T O»: the seconds of a run counted (-t) and omitted before them (-O): the default 5 + 2 (13 rows
-# in ≈ 3 min 40 s; 5 s at 8 streams hold steady after the 2 s of TCP ramp-up), the quick check 4 + 1
-sc_iperf_len() { if [ "$SC_MODE" = quick ]; then REPLY="4 1"; else REPLY="5 2"; fi; }
+# sc_iperf_len [I] -> REPLY «T O»: the seconds of a run counted (-t) and omitted before them (-O): the default 5 + 2 (13
+# rows in ≈ 3 min 40 s; 5 s at 8 streams hold steady after the 2 s of TCP ramp-up), the quick check 4 + 1; the probe of
+# the port and every run on a fast port — SC_IPERF_FAST (rate × time is the traffic: the bytes are bound by the time),
+# but a far row I (sc_iperf_far) keeps the usual length there
+sc_iperf_len() {
+    if [ "${SC_IPERF_PROBE:-0}" = 1 ]; then REPLY=$SC_IPERF_FAST
+    elif [ "${SC_PORT_FAST:-0}" = 1 ] && ! sc_iperf_far "${1:--1}"; then REPLY=$SC_IPERF_FAST
+    elif [ "$SC_MODE" = quick ]; then REPLY="4 1"; else REPLY="5 2"; fi
+}
+# sc_iperf_far I -> true when the ICMP median of the row I (sc_ping_points, before its runs) is above SC_NET_FARMS ms:
+# TCP gets to speed there in ≈ 10 round trips — 2.5 s at 250 ms, the whole of a short run (REV-BENCH-4 N4). No ping
+# (ICMP closed, Hostkey) — not far. The number is foreign input: plain digits only.
+sc_iperf_far() {
+    local p
+    [[ ${1:-} =~ ^[0-9]{1,4}$ ]] || return 1
+    p=${SP_PMED[$1]:-}
+    [[ $p =~ ^([0-9]{1,6})([.]([0-9]+))?$ ]] || return 1
+    p=$((10#${BASH_REMATCH[1]}))
+    [ "$p" -gt "$SC_NET_FARMS" ] || { [ "$p" -eq "$SC_NET_FARMS" ] && [[ ${BASH_REMATCH[3]} =~ [1-9] ]]; }
+}
 
 # sc_iperf HOST PORT down|up -> REPLY: what sc_parse_iperf says of one run (download = -R: the point sends); a hard
 # time limit over iperf3's own (a point that hangs ends as «error»)
 sc_iperf() {
-    local secs omit a=() st f="$SC_WORK/iperf.json"
-    sc_iperf_len; secs=${REPLY% *}; omit=${REPLY#* }
+    local secs omit a=() st b f="$SC_WORK/iperf.json"
+    sc_iperf_len "${SC_LROW:--1}"; secs=${REPLY% *}; omit=${REPLY#* }; SC_LAST_T=$secs
     [ "$3" = down ] && a+=(-R)
     [ "$SC_IPERF_CT" = 1 ] && a+=(--connect-timeout 3000)
     [ "${SC_NET_RCAP:-0}" -gt 0 ] && a+=(-b "$((SC_NET_RCAP / SC_STREAMS))M")       # the cap of the budget, each stream
@@ -1255,7 +1391,9 @@ sc_iperf() {
     sc_to $((secs + omit + 8)) "${SC_RUNAS[@]}" "${TOOL[iperf3]}" -c "$1" -p "$2" -P "$SC_STREAMS" -t "$secs" \
         -O "$omit" -J "${a[@]}" >"$f" 2>/dev/null
     st=$(sc_parse_iperf <"$f")
-    sc_net_count "$(sc_parse_iperf_bytes <"$f")"
+    b=$(sc_parse_iperf_bytes <"$f")
+    sc_net_count "$b"
+    [ "${SC_IPERF_PROBE:-0}" = 1 ] && [[ $b =~ ^[0-9]{1,15}$ ]] && SC_NET_PROBE_B=$((${SC_NET_PROBE_B:-0} + 10#$b))
     rm -f -- "$f"
     REPLY=${st:-error}
 }
@@ -1288,16 +1426,17 @@ sc_iperf_row() {
 sc_row_clear() {
     local i=$1
     SP_DOWN[i]=""; SP_UP[i]=""; SP_PING[i]=""; SP_DST[i]="time"; SP_UST[i]="time"; SP_DLB[i]=0; SP_ULB[i]=0
-    SP_PORT[i]=""; SP_MINRTT[i]=""; SP_RDOWN[i]=""; SP_RUP[i]=""
+    SP_PORT[i]=""; SP_MINRTT[i]=""; SP_RDOWN[i]=""; SP_RUP[i]=""; SP_DSEC[i]=""; SP_USEC[i]=""
     SP_PAVG[i]=""; SP_PMED[i]=""; SP_PJIT[i]=""; SP_PLOSS[i]=""; SP_PSAMP[i]=""; SP_PN[i]=0
 }
 
 # sc_iperf_now I DIR LAST TRY (the number of the try about to run) — the progress line of an iperf3 run («Москва · МТС · ↓ скачивание · 5 с · 8 потоков»)
 sc_iperf_now() {
     local t txt
-    sc_iperf_len; t=${REPLY% *}
+    sc_iperf_len "$1"; t=${REPLY% *}
     if [ "$SC_LANG" = ru ]; then txt=$'\x01b'"${SP_CRU[$1]:-} · ${SP_ORU[$1]:-}"$'\x01/\x01d · '; else txt=$'\x01b'"${SP_CEN[$1]:-} · ${SP_OEN[$1]:-}"$'\x01/\x01d · '; fi
     if [ "$3" = busy ]; then txt+="$(sc_t "busy, another test — try $4 of 4" "занят чужим тестом, попытка $4 из 4")"
+    elif [ "${SC_IPERF_PROBE:-0}" = 1 ]; then txt+="↓ $(sc_t "the probe of the speed · $t s · $SC_STREAMS streams" "проба скорости · $t с · $SC_STREAMS потоков")"
     elif [ "$2" = down ]; then txt+="↓ $(sc_t "download · $t s · $SC_STREAMS streams" "скачивание · $t с · $SC_STREAMS потоков")"
     else txt+="↑ $(sc_t "upload · $t s · $SC_STREAMS streams" "отдача · $t с · $SC_STREAMS потоков")"; fi
     if [ "${SC_LIVE:-0}" = 1 ]; then sc_prog "$txt"$'\x01/'; sc_live_frame; else sc_vis "$txt"; sc_prog "$REPLY"; fi
@@ -1310,24 +1449,44 @@ sc_iperf_now() {
 # 2 of 4 tries, no interval, other ports fine) — one more try so, on the next port (a point of one port: none, a hang
 # there repeats); no connection twice (or once on a point of one port) — the point is down, its upload is not tried.
 # No try starts after the time of the point (2 runs + 20 s) or of the speed part. The traffic budget (sc_net_cap_check)
-# caps a run (-b); a run that reaches 90 % of its cap is «not less than».
+# caps a run (-b); a run that reaches 90 % of its cap is «not less than». The probe of the port (SC_NET_PROBE, the port
+# not known yet): the first download that answers runs for SC_IPERF_FAST seconds (sc_port_set); on a fast port it is
+# the download of the row (the runs are that long now), on a port of 1 Gbit/s (or a far row) the row runs at its usual
+# length on the same port right after it, as before 1.2. A later run faster than the class raises it (sc_port_raise);
+# a run so held by the budget is run once more with the budget grown. A run again that fails keeps the first one.
 sc_iperf_point() {
-    local i=$1 lo hi n k p="" st v rt rr tries dir end dead=0 secs capr cd=0 cu=0 c cap
+    local i=$1 lo hi n k p="" st v rt rr tries dir end dead=0 secs capr cd=0 cu=0 c cap probe res="" fres ft fcap again
     lo=${SP_PORTS[$i]%-*}; hi=${SP_PORTS[$i]#*-}; n=$((hi - lo + 1)); [ "$n" -ge 1 ] || n=1
     k=$((RANDOM % n))
-    sc_iperf_len; secs=$(( ${REPLY% *} + ${REPLY#* } ))
+    sc_iperf_len "$i"; secs=$(( ${REPLY% *} + ${REPLY#* } ))
     sc_clock; end=$((SC_NOW + (2 * secs + 20) * 1000000)); [ "$end" -gt "$SC_SPEED_END" ] && end=$SC_SPEED_END
     for dir in down up; do
-        st="time"; tries=0
+        st="time"; tries=0; fres=""; ft=""; fcap=0; again=0
         while [ "$dead" = 0 ] && ! sc_past "$end"; do
             p=$((lo + k % n))
+            probe=0; [ "$dir" = down ] && [ "${SC_NET_PROBE:-0}" = 1 ] && [ "${SC_PORT_DONE:-0}" != 1 ] && probe=1
+            SC_IPERF_PROBE=$probe
             SC_LROW=$i; SC_LTRY=$((tries + 1)); if [ "$st" = busy ]; then SC_LDIR=busy; else SC_LDIR=$dir; fi
             sc_iperf_now "$i" "$dir" "$st" "$SC_LTRY"
             sc_net_cap_check "$i" "$dir"; capr=${SC_NET_RCAP:-0}
             sc_iperf "${SP_HOST[$i]}" "$p" "$dir"
-            st=${REPLY%% *}; tries=$((tries + 1))
+            SC_IPERF_PROBE=0; res=$REPLY
+            st=${res%% *}; tries=$((tries + 1))
             case "$st" in
-                ok) break ;;
+                ok) read -r v rt <<<"${res#ok }"
+                    if [ "$probe" = 1 ]; then
+                        sc_port_set "$v" "$i"
+                        [ "${SC_LIVE:-0}" = 1 ] && sc_live_est net
+                        if [ "$SC_PORT_FAST" != 1 ] || sc_iperf_far "$i"; then       # the usual run of the row, now
+                            fres=$res; ft=$SC_LAST_T; fcap=$capr; tries=0; continue
+                        fi
+                    elif sc_port_raise "$v"; then          # faster than the class: it grows, the budget with it
+                        [ "${SC_LIVE:-0}" = 1 ] && sc_live_est net
+                        if [ "$again" = 0 ] && [ "$capr" -gt 0 ] && awk -v x="$v" -v c="$capr" 'BEGIN { exit !(x >= 0.9 * c) }'; then
+                            fres=$res; ft=$SC_LAST_T; fcap=$capr; again=1; tries=0; continue    # held: once more
+                        fi
+                    fi
+                    break ;;
                 no_answer) if [ "$n" -lt 2 ] || [ "$tries" -ge 2 ]; then dead=1; break; fi ;;
                 busy) [ "$tries" -ge 4 ] && break ;;
                 cut) st=error; if [ "$n" -lt 2 ] || [ "$tries" -ge 2 ]; then break; fi ;;
@@ -1336,12 +1495,15 @@ sc_iperf_point() {
             k=$((k + 1)); sleep 1
         done
         [ "$dead" = 1 ] && st=no_answer
+        if [ "$st" != ok ] && [ -n "$fres" ]; then          # the run again failed: the first one stays (REV-BENCH-4 nit 2)
+            st=ok; res=$fres; SC_LAST_T=$ft; capr=$fcap; dead=0
+        fi
         [ -n "$p" ] && SP_PORT[i]=$p
         if [ "$st" = ok ]; then
-            read -r v rt rr <<<"${REPLY#ok }"
+            read -r v rt rr <<<"${res#ok }"
             [ "$rr" = - ] && rr=""
-            if [ "$dir" = down ]; then SP_DOWN[i]=$v; SP_RDOWN[i]=$rr; cd=$capr
-            else SP_UP[i]=$v; SP_RUP[i]=$rr; cu=$capr; [ "$rt" != - ] && SP_MINRTT[i]=$rt; fi
+            if [ "$dir" = down ]; then SP_DOWN[i]=$v; SP_RDOWN[i]=$rr; cd=$capr; SP_DSEC[i]=${SC_LAST_T:-}
+            else SP_UP[i]=$v; SP_RUP[i]=$rr; cu=$capr; [ "$rt" != - ] && SP_MINRTT[i]=$rt; SP_USEC[i]=${SC_LAST_T:-}; fi
         fi
         if [ "$dir" = down ]; then SP_DST[i]=$st; else SP_UST[i]=$st; fi
         if [ "$dir" = down ] && [ "$st" != ok ] && [ "$st" != time ] && [ "${2:-}" = 1 ]; then SP_UST[i]=skipped; break; fi
@@ -1420,11 +1582,11 @@ sc_speed_points() {
 }
 
 # sc_net_iperf — the table: every point of the set in order within the time of the speed part (quick 60 s, --full 260 s,
-# --all 600 s; a row the time did not reach stays «time»)
+# --all 600 s; a row the time did not reach stays «time»); the first download that answers is the probe of the port
 sc_net_iperf() {
     local i budget
     sc_speed_points
-    SC_NET_BYTES=0; SC_NET_RCAP=0; SC_NET_NCAP=0
+    sc_net_port_reset; SC_NET_PROBE=1
     case "$SC_POINTS" in quick) budget=60 ;; long) budget=600 ;; *) budget=260 ;; esac
     sc_clock; SC_SPEED_END=$((SC_NOW + budget * 1000000))
     # IPv4, unless only IPv6 reaches the Internet here (a route alone does not say it works: the GET of sc_sysinfo does)
@@ -1598,7 +1760,7 @@ sc_dl_enough() {
 # speed-test file throttled on its side: 7–28 Mbit/s on a 2.8 Gbit/s server, 12.11); at most the points of the list.
 # The value of the test is the best of all (bench/channel.py: «the value = the best of the tries»). GET only: no upload.
 sc_net_down() {
-    local regions want id reg en ru url req size cap secs r best="" bestlb=0 v lb ref
+    local regions want id reg en ru url req size cap secs r best="" bestlb=0 v lb ref q
     if [ "$SC_MODE" = quick ]; then regions="any ru"; else regions="any eu ru us"; fi
     for want in $regions; do
         DLR[$want]=""; DLV[$want]=""; DLB[$want]=0; DLN[$want]=""; DLT[$want]=""
@@ -1630,15 +1792,18 @@ sc_net_down() {
             best=$v; bestlb=${DLB[$want]}
         fi
     done
-    if [ -n "$best" ]; then sc_set net_down "$best" http "" 0; X[net_down_lb]=$bestlb
+    # the quick check: a few MB a region, as the quick test of Kaskad — its cap (quick_cap 700) holds, the score is ≈
+    q=0; [ "$SC_MODE" = quick ] && q=1
+    if [ -n "$best" ]; then sc_set net_down "$best" http "" "$q"; X[net_down_lb]=$bestlb
     else sc_set net_down "" "" no_answer; X[net_down_lb]=0; fi
 }
 
 # the network: the latency and DNS («Отклик и DNS»), the speed table (iperf3; the HTTP download when iperf3 is missing or
 # no point answered — download only), Speedtest by Ookla. «Канал» (net_bw) = the scale of Kaskad over the best download
-# and the best upload of the iperf3 rows (Kaskad: «the value = the best of the tries»)
+# and the best upload of the iperf3 rows (Kaskad: «the value = the best of the tries»), above 1 Gbit/s on to 1000 at
+# 10 Gbit/s (ext_from / ext_top)
 sc_net() {
-    local v q
+    local v
     ST=([status]=skipped [why]="${TWHY[speedtest]:-}")
     [ -n "${TOOL[iperf3]:-}" ] && [ "$SC_NONET" != 1 ] || SPN=0
     SC_PHASE=net; [ "${SC_LIVE:-0}" = 1 ] && sc_live_est net
@@ -1650,10 +1815,11 @@ sc_net() {
         [ -n "${TOOL[iperf3]}" ] && sc_net_iperf
         sc_speed_best down
         if [ -n "$REPLY" ]; then
-            q=0; [ "$SC_MODE" = quick ] && q=1          # quick: the score at most 700 (quick_cap) — ≈
-            sc_set net_down "$REPLY" iperf3 "" "$q"; X[net_down_lb]=$REPLY2
+            # the iperf3 runs are timed, in the quick check too: no quick cap, no ≈ (bench 1.2); «not less than» is said
+            # by ≥ at the number (X[*_lb]), its score is then not less either
+            sc_set net_down "$REPLY" iperf3 "" 0; X[net_down_lb]=$REPLY2
             sc_speed_best up
-            if [ -n "$REPLY" ]; then sc_set net_up "$REPLY" iperf3 "" "$q"; X[net_up_lb]=$REPLY2
+            if [ -n "$REPLY" ]; then sc_set net_up "$REPLY" iperf3 "" 0; X[net_up_lb]=$REPLY2
             else sc_set net_up "" "" no_answer; X[net_up_lb]=0; fi
         elif [ -n "$SC_FETCH" ]; then
             SC_HTTP=1
@@ -1809,11 +1975,11 @@ sc_color_codes() {
 # sc_glyphs — the characters: UTF-8, or ASCII (--ascii, SC_ASCII=1, a locale set without UTF-8)
 sc_glyphs() {
     if [ "$SC_ASCII" = 1 ]; then
-        G_FULL='#'; G_TRACK='.'; G_PARTS=('' '' '' '' '' '' '' ''); G_SPARK=('_' '.' '-' '=' '+' '*' '#' '@')
+        G_FULL='#'; G_OVER='>'; G_TRACK='.'; G_PARTS=('' '' '' '' '' '' '' ''); G_SPARK=('_' '.' '-' '=' '+' '*' '#' '@')
         G_DOT='.'; G_PT='o'; G_TICK=':'; G_RL='|'; G_RX='+'; G_RR='|'; G_RH='-'; G_RUN='='; G_RUNT='-'
         G_SPIN=('|' '/' '-' "\\"); G_OK='ok'
     else
-        G_FULL='█'; G_TRACK='░'; G_PARTS=('' '▏' '▎' '▍' '▌' '▋' '▊' '▉'); G_SPARK=('▁' '▂' '▃' '▄' '▅' '▆' '▇' '█')
+        G_FULL='█'; G_OVER='▸'; G_TRACK='░'; G_PARTS=('' '▏' '▎' '▍' '▌' '▋' '▊' '▉'); G_SPARK=('▁' '▂' '▃' '▄' '▅' '▆' '▇' '█')
         G_DOT='·'; G_PT='●'; G_TICK='┊'; G_RL='├'; G_RX='┼'; G_RR='┤'; G_RH='─'; G_RUN='━'; G_RUNT='─'
         G_SPIN=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏'); G_OK='✓'
     fi
@@ -1864,9 +2030,12 @@ sc_f_time() { printf -v REPLY '%d:%02d' $(($1 / 60)) $(($1 % 60)); }   # SECONDS
 # ── bars, the sparkline, the axis ──
 
 # sc_hbar V MAX W ROLE -> REPLY: V of MAX on W cells: █ and a left eighth (rounded), the rest of the track ░ grey
-sc_hbar() {
+sc_hbar() {   # V MAX WIDTH ROLE -> REPLY; V above MAX (the line log fixes its scale early): a full bar ending in ▸
     local u full r used s t
-    u=$(awk -v v="$1" -v m="$2" -v w="$3" 'BEGIN { u = (m > 0 ? int(v / m * w * 8 + 0.5) : 0); if (u > w * 8) u = w * 8; if (u < 0) u = 0; print u }')
+    u=$(awk -v v="$1" -v m="$2" -v w="$3" 'BEGIN { if (m > 0 && v + 0 > m + 0) { print "over"; exit } u = (m > 0 ? int(v / m * w * 8 + 0.5) : 0); if (u > w * 8) u = w * 8; if (u < 0) u = 0; print u }')
+    if [ "$u" = over ]; then          # faster than the scale
+        SC_NOVER=1; sc_rep "$G_FULL" $(($3 - 1)); REPLY=$'\x01'"$4$REPLY$G_OVER"$'\x01/'; return 0
+    fi
     if [ "$SC_ASCII" = 1 ]; then u=$(( (u + 4) / 8 * 8 )); fi
     full=$((u / 8)); r=$((u % 8)); used=$((full + (r > 0 ? 1 : 0)))
     sc_rep "$G_FULL" "$full"; s=$REPLY; [ "$r" -gt 0 ] && s+=${G_PARTS[$r]}
@@ -1986,10 +2155,11 @@ sc_scale_lines() {
 
 # ── the network table ──
 
-# sc_net_scale -> SC_NMAX: the full bar, Mbit/s: max(1000, the best measured rounded up to 1 / 2,5 / 10 / 25 / 100
-# Gbit/s); in the line log it is fixed by the first row (SC_NMAX_FIX)
+# sc_net_scale -> SC_NMAX: the full bar, Mbit/s: the class of the port (sc_port_set) or the best measured, whichever is
+# more, rounded up to 1 / 2,5 / 10 / 25 / 40 / 100 Gbit/s — one scale for every row; in the line log it is fixed by the
+# first row (SC_NMAX_FIX, sc_net_step)
 sc_net_scale() {
-    local i best=0 v
+    local i best=${SC_PORT_CLASS:-0} v
     if [ -n "${SC_NMAX_FIX:-}" ]; then SC_NMAX=$SC_NMAX_FIX; return 0; fi
     for ((i = 0; i < SPN; i++)); do
         for v in "${SP_DOWN[$i]}" "${SP_UP[$i]}"; do sc_isnum "$v" && best=$(awk -v a="$best" -v b="$v" 'BEGIN { print (b > a ? b : a) }'); done
@@ -1997,7 +2167,10 @@ sc_net_scale() {
     if [ "${ST[status]:-}" = ok ]; then
         for v in "${ST[down]:-}" "${ST[up]:-}"; do sc_isnum "$v" && best=$(awk -v a="$best" -v b="$v" 'BEGIN { print (b > a ? b : a) }'); done
     fi
-    SC_NMAX=$(awk -v b="$best" 'BEGIN { n = split("1000 2500 10000 25000 100000", s, " "); for (i = 1; i <= n; i++) if (b <= s[i]) { print s[i]; exit } print s[n] }')
+    sc_net_step "$best"; SC_NMAX=$REPLY
+}
+sc_net_step() {   # MBIT -> REPLY: the step of the bar scale not below it (at least 1 Gbit/s)
+    REPLY=$(awk -v b="${1:-0}" 'BEGIN { n = split("1000 2500 10000 25000 40000 100000", s, " "); for (i = 1; i <= n; i++) if (b + 0 <= s[i]) { print s[i]; exit } print s[n] }')
 }
 sc_f_scale() {   # MBIT -> REPLY «10 Гбит/с»
     if [ "$1" -ge 1000 ]; then sc_gnum "$(awk -v v="$1" 'BEGIN { print v / 1000 }')" "$([ $(($1 % 1000)) = 0 ] && echo 0 || echo 1)"
@@ -2138,10 +2311,28 @@ sc_region_name() {
     esac
 }
 
-# sc_net_head -> lines into SCR: «Network · iperf3 …» and the head of the columns
+# sc_net_lens A B -> REPLY «LO HI»: the least and the most counted seconds of the runs of the rows A … B−1 as they ran
+# (SP_DSEC, SP_USEC) and of the rows from B on as planned now (sc_iperf_len I: a far row on a fast port keeps the usual
+# length); nothing yet — the length of now
+sc_net_lens() {
+    local j t lo="" hi="" ts
+    for ((j = $1; j < SPN; j++)); do
+        if [ "$j" -lt "$2" ]; then ts="${SP_DSEC[$j]:-} ${SP_USEC[$j]:-}"
+        else [ "${SP_M[$j]:-iperf3}" = iperf3 ] || continue; sc_iperf_len "$j"; ts=${REPLY% *}; fi
+        for t in $ts; do
+            [[ $t =~ ^[0-9]{1,3}$ ]] || continue
+            { [ -z "$lo" ] || [ "$t" -lt "$lo" ]; } && lo=$t
+            { [ -z "$hi" ] || [ "$t" -gt "$hi" ]; } && hi=$t
+        done
+    done
+    [ -n "$lo" ] || { sc_iperf_len; lo=${REPLY% *}; hi=$lo; }
+    REPLY="$lo $hi"
+}
+# sc_net_head [A B] -> lines into SCR: «Network · iperf3 …» and the head of the columns; the seconds of the runs of the
+# rows from A (sc_net_lens; by default all, those done so far as they ran): «по 2 с» or «по 2–5 с»
 sc_net_head() {
     local t o s
-    sc_iperf_len; t=${REPLY% *}; o=${REPLY#* }
+    sc_net_lens "${1:-0}" "${2:-${SC_LDONE:-0}}"; t=${REPLY% *}; [ "${REPLY#* }" != "$t" ] && t+="–${REPLY#* }"
     sc_f_scale "$SC_NMAX"; s=$REPLY
     if [ "$SC_HTTP" = 1 ]; then
         SCR+=($'\x01m'"$(sc_t "Network" "Сеть")"$'\x01/\x01d · '"$(sc_t "HTTP, download only" "HTTP, только скачивание") · $(sc_unit mbit) · $(sc_t "scale" "шкала") — $s"$'\x01/')
@@ -2269,6 +2460,7 @@ sc_legend() {
     for ((i = 0; i < SPN; i++)); do [ "${SP_DLB[$i]:-0}${SP_ULB[$i]:-0}" != 00 ] && [ "${SP_CAP[$i]:-0}" -gt 0 ] && lb=1; done
     for i in "${SR_A[@]}"; do [ "$i" = 1 ] && ap=1; done
     [ "$lb" = 1 ] && SCR+=($'\x01d'"$(sc_t "≥ — not less than: the port of the point is slower than this server" "≥ — не меньше: порт точки медленнее этого сервера")"$'\x01/')
+    [ "${SC_NOVER:-0}" = 1 ] && SCR+=($'\x01d'"$G_OVER — $(sc_t "faster than the bar scale (a log fixes it before the faster rows)" "быстрее шкалы полос (в журнале она задана до быстрых строк)")"$'\x01/')
     if [ "${SC_NET_NCAP:-0}" -gt 0 ]; then
         sc_gnum "$(awk -v b="$SC_NET_BYTES" 'BEGIN { printf "%.1f", b / 1e9 }')" 1; g=$REPLY
         SCR+=($'\x01d'"$(sc_t "≥ — held by the traffic budget: iperf3 $g GB of $((SC_NET_BUDGET / 1000000000)) (SC_NET_BUDGET_GB)" \
@@ -2361,7 +2553,7 @@ sc_screen_init() {
     SC_W=80; [ "$SC_COLS" -ge 100 ] && { SC_W=$SC_COLS; [ "$SC_W" -gt 120 ] && SC_W=120; }
     SC_AX=40; [ "$SC_COLS" -ge 100 ] && { SC_AX=$((40 + SC_COLS - 80)); [ "$SC_AX" -gt 60 ] && SC_AX=60; }
     sc_axis_ticks
-    SC_LIVE=0; SC_WAS_LIVE=0; SC_PHASE=start; SC_LDONE=0; SC_LROW=-1; SC_EST=0; SC_NMAX_FIX=""; SC_LOG_NET=0
+    SC_LIVE=0; SC_WAS_LIVE=0; SC_PHASE=start; SC_LDONE=0; SC_LROW=-1; SC_EST=0; SC_NMAX_FIX=""; SC_LOG_NET=0; SC_NOVER=0
     SC_LOG_PEND=(); SC_LIVE_H=0
     SC_TICK_PID=""; printf -v SC_START '%(%s)T' -1
 }
@@ -2382,40 +2574,120 @@ sc_log_head() {
     SCR=(); sc_passport final; SCR+=(""); sc_net_notice; sc_print_lines "${SCR[@]}"
 }
 # sc_net_notice -> lines into SCR (and a blank one): what the network part will cost in traffic and how to cut it —
-# shown before the network (the log head, the live frame); nothing with --no-net
+# shown before the network (the log head, the live frame); nothing with --no-net. Its first line (sc_net_s1) changes
+# in place on the live screen once the port is known: it is one line in every case, the frame keeps its height.
 sc_net_notice() {
-    local t gb
+    local t
     [ "$SC_NONET" = 1 ] && return 0
-    if [ "$SC_NOIPERF" = 1 ]; then t=$(sc_t "Network: no iperf3 (SC_NO_IPERF=1)." "Сеть: без iperf3 (SC_NO_IPERF=1).")
-    elif [ "${SC_NET_BUDGET:-0}" -gt 0 ]; then
-        gb=$((SC_NET_BUDGET / 1000000000))
-        t=$(sc_t "Network: iperf3 up to $gb GB of traffic (SC_NET_BUDGET_GB): faster rows are held, marked «≥»." \
-            "Сеть: iperf3 до $gb ГБ трафика (SC_NET_BUDGET_GB): быстрее — с пределом и пометкой «≥».")
-    else t=$(sc_t "Network: iperf3 with no limit of traffic (SC_NET_BUDGET_GB=0)." "Сеть: iperf3 без предела трафика (SC_NET_BUDGET_GB=0).")
-    fi
+    sc_net_s1; sc_cut "$REPLY" "$SC_W"; SCR+=($'\x01d'"$REPLY"$'\x01/'); t=""
     if [ "$SC_MODE" != quick ] && [ "$SC_NOSPEEDTEST" != 1 ]; then
-        t+=" $(sc_t "Speedtest by Ookla — up to 10 GB more, its terms accepted by a flag." "Speedtest by Ookla — ещё до 10 ГБ, его условия приняты флагом.")"
+        t+=" $(sc_t "Speedtest by Ookla — ≈ 2 GB more per Gbit/s of the port (≈ 20 GB at 10 Gbit/s), its terms accepted by a flag." "Speedtest by Ookla — ещё ≈ 2 ГБ на каждый Гбит/с порта (на 10 Гбит/с — ≈ 20 ГБ), его условия приняты флагом.")"
     fi
     if [ "$SC_MODE" != quick ]; then t+=" $(sc_t "Less: without --full / --all." "Меньше: без --full / --all.")"; fi
     t+=" $(sc_t "No iperf3: SC_NO_IPERF=1; no network: --no-net." "Без iperf3: SC_NO_IPERF=1; без сети: --no-net.")"
-    sc_wrap_into d "$t"; SCR+=("")
+    sc_wrap_into d "${t# }"; SCR+=("")
+}
+# sc_net_s1 [pre] -> REPLY: the first line of the traffic notice — the budget of iperf3 before the network (or «pre»);
+# once the probe has run, with the budget of the mode: what the probe gave (the probe of one point, not the port: «≈»)
+# or, once a faster run raised the class, the port «≥» that run — and the budget («≥» when it is the ceiling of the mode).
+# The user's budget below the floor of the runs (sc_net_floor) is not kept: the line says what the runs take at least.
+sc_net_s1() {
+    local gb c pt fl
+    gb=$(( ${SC_NET_BUDGET0:-${SC_NET_BUDGET:-0}} / 1000000000 ))
+    if [ "$SC_NOIPERF" = 1 ]; then REPLY=$(sc_t "Network: no iperf3 (SC_NO_IPERF=1)." "Сеть: без iperf3 (SC_NO_IPERF=1).")
+    elif [ "$gb" -le 0 ]; then
+        REPLY=$(sc_t "Network: iperf3 with no limit of traffic (SC_NET_BUDGET_GB=0)." "Сеть: iperf3 без предела трафика (SC_NET_BUDGET_GB=0).")
+    elif [ "${SC_NET_USERB:-0}" = 1 ]; then
+        if [ "${1:-}" != pre ] && [ -n "${SC_NET_FLOOR:-}" ]; then REPLY=$SC_NET_FLOOR; else SC_PORT_DONE=0 SC_PORT_FAST=0 sc_net_floor; fi
+        if [ "${SC_NET_BUDGET0:-0}" -lt "$REPLY" ]; then          # not kept: every run at 1 Gbit/s at least
+            sc_gnum "$(awk -v b="$REPLY" 'BEGIN { printf "%.1f", b / 1e9 }')" 1; fl=$REPLY
+            REPLY=$(sc_t "Network: iperf3 up to ≈ $fl GB (SC_NET_BUDGET_GB — at least ≈ $fl GB)." \
+                "Сеть: iperf3 до ≈ $fl ГБ трафика (SC_NET_BUDGET_GB — не меньше ≈ $fl ГБ).")
+        else
+            REPLY=$(sc_t "Network: iperf3 up to $gb GB of traffic (SC_NET_BUDGET_GB): faster rows «≥»." \
+                "Сеть: iperf3 до $gb ГБ трафика (SC_NET_BUDGET_GB): быстрее — «≥».")
+        fi
+    elif [ "${1:-}" = pre ] || [ -z "${SC_PORT_MBIT:-}" ]; then
+        c=$(( ${SC_NET_CEILB:-0} / 1000000000 ))
+        if [ "$c" -gt "$gb" ]; then
+            REPLY=$(sc_t "Network: iperf3 up to $gb GB of traffic at 1 Gbit/s, up to $c GB if faster." \
+                "Сеть: iperf3 до $gb ГБ трафика при 1 Гбит/с, на быстром порту — до $c ГБ.")
+        else REPLY=$(sc_t "Network: iperf3 up to $gb GB of traffic." "Сеть: iperf3 до $gb ГБ трафика."); fi
+    else
+        if [ "$SC_PORT_MBIT" -gt "${SC_PROBE_MBIT:-0}" ]; then sc_f_port "$SC_PORT_MBIT"; pt="$(sc_t "port" "порт") ≥ $REPLY"
+        else sc_f_port "$SC_PORT_MBIT"; pt="$(sc_t "probe" "проба") ≈ $REPLY"; fi
+        gb=$((SC_NET_BUDGET / 1000000000))
+        if [ "$SC_PORT_FAST" = 1 ] && [ "$SC_NET_BUDGET" -ge "${SC_NET_CEILB:-0}" ]; then
+            REPLY=$(sc_t "Network: $pt — iperf3 up to $gb GB (the limit): faster «≥»." "Сеть: $pt — iperf3 до $gb ГБ (предел): быстрее — «≥».")
+        else REPLY=$(sc_t "Network: $pt — iperf3 up to $gb GB of traffic." "Сеть: $pt — iperf3 до $gb ГБ трафика."); fi
+    fi
+}
+# sc_port_least -> REPLY: Mbit/s the port gave at least — the most of the probe (or the run that raised the class) and
+# of the iperf3 rows not «≥» (a held row is the budget's or the point's); "" — nothing known
+sc_port_least() {
+    local i v best=${SC_PORT_MBIT:-}
+    for ((i = 0; i < SPN; i++)); do
+        [ "${SP_M[$i]}" = iperf3 ] || continue
+        for v in "${SP_DOWN[$i]}:${SP_DLB[$i]:-0}" "${SP_UP[$i]}:${SP_ULB[$i]:-0}"; do
+            [ "${v#*:}" = 0 ] || continue; v=${v%:*}
+            [[ $v =~ ^[0-9]{1,7}([.][0-9]+)?$ ]] || continue; v=$((10#${v%%.*}))
+            { [ -z "$best" ] || [ "$v" -gt "$best" ]; } && best=$v
+        done
+    done
+    REPLY=$best
+}
+# sc_net_port_line -> a line into SCR (the line log, above the table): the first line of the notice once the port is
+# known, when it says more than the one of the head
+sc_net_port_line() {
+    local now
+    [ "$SC_NONET" = 1 ] && return 0
+    [ "${SC_PORT_DONE:-0}" = 1 ] || return 0
+    sc_net_s1; now=$REPLY; sc_net_s1 pre
+    [ "$now" = "$REPLY" ] || { sc_cut "$now" "$SC_W"; SCR+=($'\x01d'"$REPLY"$'\x01/'); }
+    return 0
+}
+sc_f_port() {   # MBIT -> REPLY: «940 Мбит/с», «4,1 Гбит/с», «25 Гбит/с»
+    if [ "$1" -lt 1000 ]; then REPLY="$1 $(sc_t "Mbit/s" "Мбит/с")"
+    elif [ "$1" -lt 9950 ]; then sc_gnum "$(awk -v v="$1" 'BEGIN { print v / 1000 }')" 1; REPLY+=" $(sc_t "Gbit/s" "Гбит/с")"
+    else sc_gnum "$(awk -v v="$1" 'BEGIN { print v / 1000 }')" 0; REPLY+=" $(sc_t "Gbit/s" "Гбит/с")"; fi
 }
 sc_log_row() {   # I — SC_ON_ROW of the line log (nothing in JSON or on the live screen: stdout is theirs)
-    local i=$1 j best
+    local i=$1 j best lo hi pl
     if [ "$SC_JSON" = 1 ] || [ "${SC_LIVE:-0}" = 1 ]; then return 0; fi
     if [ "${SC_LOG_NET:-0}" = 0 ]; then
-        # the head and the scale of the bars come with the first row that has a value; rows before it wait (the last
-        # row does not: the head then has the scale of 1 Gbit/s)
-        if [ -z "${SP_DOWN[$i]:-}${SP_UP[$i]:-}" ] && [ "$i" -lt $((SPN - 1)) ]; then SC_LOG_PEND+=("$i"); return 0; fi
+        # the head (the seconds of the runs, the scale of the bars) once a row has a value and the port is known (an
+        # upload alone comes before the probe: its download failed); rows before wait (the last row does not: the head
+        # then says what there is)
+        if { [ -z "${SP_DOWN[$i]:-}${SP_UP[$i]:-}" ] || { [ -z "${SP_DOWN[$i]:-}" ] && [ "${SP_M[$i]}" = iperf3 ] \
+            && [ "${SC_PORT_DONE:-0}" != 1 ]; }; } && [ "$i" -lt $((SPN - 1)) ]; then SC_LOG_PEND+=("$i"); return 0; fi
         SC_LOG_NET=1; SC_LOG_REG=""
-        best=$(awk -v a="${SP_DOWN[$i]:-0}" -v b="${SP_UP[$i]:-0}" 'BEGIN { print (a + 0 > b + 0 ? a + 0 : b + 0) }')
-        SC_NMAX_FIX=$(awk -v b="$best" 'BEGIN { n = split("1000 2500 10000 25000 100000", s, " "); for (i = 1; i <= n; i++) if (b <= s[i]) { print s[i]; exit } print s[n] }')
+        best=${SC_PORT_CLASS:-0}
+        for j in "${SC_LOG_PEND[@]}" "$i"; do sc_log_best "$j" "$best"; best=$REPLY; done
+        sc_net_step "$best"; SC_NMAX_FIX=$REPLY
         sc_net_scale; sc_net_names
-        SCR=(); sc_net_head; sc_print_lines "${SCR[@]}"
+        SCR=(); sc_net_port_line; sc_net_s1; SC_LOG_S1=$REPLY
+        sc_net_head 0 $((i + 1)); sc_net_lens 0 $((i + 1)); SC_LOG_LENS=$REPLY; sc_print_lines "${SCR[@]}"
         for j in "${SC_LOG_PEND[@]}"; do sc_log_row_lines "$j"; done
         SC_LOG_PEND=()
+    else
+        # the port turned out faster (sc_port_raise): its line again, and the head when the runs or the scale changed —
+        # the head above every row stays true (REV-BENCH-4 N1, nit 1)
+        SCR=(); sc_net_s1
+        if [ "$REPLY" != "${SC_LOG_S1:-}" ] && [ "${SP_M[$i]}" = iperf3 ]; then
+            SC_LOG_S1=$REPLY; sc_cut "$REPLY" "$SC_W"; SCR+=($'\x01d'"$REPLY"$'\x01/')
+        fi
+        sc_net_lens "$i" $((i + 1)); read -r lo hi <<<"$REPLY"; pl=${SC_LOG_LENS:-"$lo $hi"}
+        sc_net_step "${SC_PORT_CLASS:-0}"; best=$REPLY
+        if [ "$lo" -lt "${pl% *}" ] || [ "$hi" -gt "${pl#* }" ] || [ "$best" -gt "${SC_NMAX_FIX:-0}" ]; then
+            [ "$best" -gt "${SC_NMAX_FIX:-0}" ] && SC_NMAX_FIX=$best
+            sc_net_scale; sc_net_head "$i" $((i + 1)); SC_LOG_LENS="$lo $hi"; SC_LOG_REG=""
+        fi
+        sc_print_lines "${SCR[@]}"
     fi
     sc_log_row_lines "$i"
+}
+sc_log_best() {   # I MBIT -> REPLY: the larger of MBIT and the values of the row I
+    REPLY=$(awk -v a="${SP_DOWN[$1]:-0}" -v b="${SP_UP[$1]:-0}" -v c="${2:-0}" 'BEGIN { a += 0; b += 0; c += 0; if (b > a) a = b; if (c > a) a = c; print a }')
 }
 sc_log_row_lines() {   # I — the region line (when it changes) and the row I, printed
     local i=$1
@@ -2436,7 +2708,7 @@ sc_log_tail() {
     local j
     if [ "${SC_LOG_NET:-0}" = 0 ] && [ ${#SC_LOG_PEND[@]} -gt 0 ]; then
         SC_LOG_NET=1; SC_LOG_REG=""; sc_net_scale; sc_net_names
-        SCR=(); sc_net_head; sc_print_lines "${SCR[@]}"
+        SCR=(); sc_net_port_line; sc_net_head 0 "$SPN"; sc_print_lines "${SCR[@]}"
         for j in "${SC_LOG_PEND[@]}"; do sc_log_row_lines "$j"; done
         SC_LOG_PEND=()
     fi
@@ -2473,13 +2745,17 @@ sc_live_frame() {   # the current frame into $SC_WORK/live.f (whole: written asi
     } >"$f.n" 2>/dev/null && mv -f "$f.n" "$f" 2>/dev/null
     return 0
 }
-sc_live_est() {   # -> SC_EST (s): what the check should take, from what is left
-    local t o row el
-    sc_iperf_len; t=${REPLY% *}; o=${REPLY#* }; row=$((2 * (t + o + 2)))
+sc_live_est() {   # -> SC_EST (s): what the check should take, from what is left (the rows not done; the probe of the
+    local j el pre=10 tot=0 left=0          # port while it is not known, 4 s — the ping of the points with it, 6 s)
+    [ "${SC_PORT_DONE:-0}" = 1 ] && pre=0
+    for ((j = 0; j < SPN; j++)); do            # a row: 2 runs of its length (a far row keeps the usual one) + 2 s each
+        sc_iperf_len "$j"; tot=$(( tot + 2 * (${REPLY% *} + ${REPLY#* } + 2) ))
+        [ "$j" -ge "${SC_LDONE:-0}" ] && left=$(( left + 2 * (${REPLY% *} + ${REPLY#* } + 2) ))
+    done
     sc_clock; el=$(( (SC_NOW - SC_T0) / 1000000 ))
     case "$1" in
-        sys) if [ "$SC_MODE" = quick ]; then SC_EST=$((el + 40 + 6 + SPN * row)); else SC_EST=$((el + 75 + 6 + SPN * row + 35)); fi ;;
-        *) if [ "$SC_MODE" = quick ]; then SC_EST=$((el + 6 + SPN * row)); else SC_EST=$((el + 6 + SPN * row + 35)); fi ;;
+        sys) if [ "$SC_MODE" = quick ]; then SC_EST=$((el + 40 + pre + tot)); else SC_EST=$((el + 75 + pre + tot + 35)); fi ;;
+        *) if [ "$SC_MODE" = quick ]; then SC_EST=$((el + pre + left)); else SC_EST=$((el + pre + left + 35)); fi ;;
     esac
     sc_f_time "$SC_EST"; SC_EST_TXT=$REPLY
 }
@@ -2616,6 +2892,18 @@ sc_report_json() {
     sc_json_num "${SC_NET_BYTES:-}"; s+="\"iperf3_bytes\":$REPLY"
     sc_json_num "${ST[bytes]:-}"; s+=",\"speedtest_bytes\":$REPLY"
     if [ "${SC_NET_BUDGET:-0}" -gt 0 ]; then s+=",\"budget_bytes\":$SC_NET_BUDGET"; else s+=",\"budget_bytes\":null"; fi
+    # bench 1.2: the budget before the port was known (of the mode or the user's), its ceiling on a fast port (none for
+    # the user's), what the probe gave (one point), the port at least (the probe or a faster row not «≥», sc_port_least)
+    # and its class, the seconds of the runs (each row has its own too; a far row keeps the usual length)
+    if [ "${SC_NET_BUDGET0:-0}" -gt 0 ]; then s+=",\"budget_start_bytes\":$SC_NET_BUDGET0"; else s+=",\"budget_start_bytes\":null"; fi
+    if [ "${SC_NET_USERB:-0}" != 1 ] && [ "${SC_NET_CEILB:-0}" -gt 0 ]; then s+=",\"budget_ceiling_bytes\":$SC_NET_CEILB"; else s+=",\"budget_ceiling_bytes\":null"; fi
+    sc_json_bool "${SC_NET_USERB:-0}"; s+=",\"budget_user\":$REPLY"
+    sc_json_num "${SC_PROBE_MBIT:-}"; s+=",\"probe_mbit\":$REPLY"; sc_port_least; sc_json_num "$REPLY"; s+=",\"port_mbit\":$REPLY"
+    sc_json_num "${SC_PORT_CLASS:-}"; s+=",\"port_class_mbit\":$REPLY"
+    sc_json_bool "${SC_PORT_FAST:-0}"; s+=",\"port_fast\":$REPLY"
+    sc_iperf_len; s+=",\"run_seconds\":${REPLY% *},\"omit_seconds\":${REPLY#* }"
+    s+=",\"probe_seconds\":${SC_IPERF_FAST% *},\"probe_omit_seconds\":${SC_IPERF_FAST#* },\"far_ping_ms\":$SC_NET_FARMS"
+    sc_json_num "${SC_NET_PROBE_B:-}"; s+=",\"probe_bytes\":$REPLY"
     s+=",\"floor_cap_mbit\":$SC_NET_CAPMBIT,\"held_runs\":${SC_NET_NCAP:-0}"
     s+="},\"speed\":["
     for ((i = 0; i < SPN; i++)); do
@@ -2635,6 +2923,7 @@ sc_report_json() {
         s+="]"
         sc_json_num "${SP_MINRTT[$i]:-}"; s+=",\"min_rtt\":$REPLY"
         sc_json_num "${SP_RDOWN[$i]:-}"; s+=",\"retr_down\":$REPLY"; sc_json_num "${SP_RUP[$i]:-}"; s+=",\"retr_up\":$REPLY"
+        sc_json_num "${SP_DSEC[$i]:-}"; s+=",\"down_seconds\":$REPLY"; sc_json_num "${SP_USEC[$i]:-}"; s+=",\"up_seconds\":$REPLY"
         sc_row_status "$i"; s+=",\"status\":\"$REPLY\",\"down_status\":\"${SP_DST[$i]}\",\"up_status\":\"${SP_UST[$i]}\""
         sc_json_bool "${SP_DLB[$i]}"; s+=",\"down_at_least\":$REPLY"; sc_json_bool "${SP_ULB[$i]}"; s+=",\"up_at_least\":$REPLY}"
     done
@@ -2675,9 +2964,13 @@ sc_usage() {
   --ascii     только ASCII (полосы # и .)
   --no-color  без цвета (или NO_COLOR=1)
   --lang en   по-английски
-  Трафик сети: iperf3 до 5 ГБ (--full — до 30, --all — до 60): быстрые строки — с пределом и «≥»; предел —
-  SC_NET_BUDGET_GB (0 — без предела). Speedtest (--full, --all) — ещё до 10 ГБ. Без iperf3 — SC_NO_IPERF=1, без сети —
-  --no-net.
+  Трафик сети: iperf3 до 5 ГБ (--full — до 30, --all — до 60) на порту 1 Гбит/с; на быстром порту замеры по 2 с
+  (дальние точки, пинг от 150 мс, — как обычно), а бюджет растёт с портом — до 15 / 100 / 200 ГБ, сверх него строки —
+  с пределом и «≥». Свой бюджет — SC_NET_BUDGET_GB=N (0 — без предела; меньше минимума замеров не бывает, ≈ 4,1 /
+  23,1 / 51,1 ГБ). Speedtest (--full, --all) — ещё ≈ 2 ГБ на каждый Гбит/с порта (на 10 Гбит/с — ≈ 20 ГБ).
+  Без iperf3 — SC_NO_IPERF=1, без сети — --no-net.
+  Баллы — шкала Kaskad; сетевой канал выше 1 Гбит/с — своя кривая bench, ниже оценки в панели Kaskad,
+  до 1000 при 10 Гбит/с (больше 1000 не бывает).
   Переменные: SC_LANG=ru|en, SC_FULL=1, SC_ALL=1, SC_JSON=1, SC_NO_NET=1, SC_NO_FETCH=1 (ничего не скачивать),
   SC_NO_IPERF=1, SC_NO_SPEEDTEST=1, SC_NET_BUDGET_GB=N, SC_ASCII=1, NO_COLOR=1.
 Ничего не устанавливает: недостающие iperf3, Speedtest, sysbench и fio — только во временную папку, удаляется в конце.
@@ -2695,9 +2988,13 @@ Kaskad server check: CPU, memory, disk, network — scores 0–1000 on the Kaska
   --ascii     ASCII only (bars of # and .)
   --no-color  no colour (or NO_COLOR=1)
   --lang ru   in Russian
-  Network traffic: iperf3 up to 5 GB (--full up to 30, --all up to 60): fast rows are held, marked «≥»; the limit —
-  SC_NET_BUDGET_GB (0 — none). Speedtest (--full, --all) — up to 10 GB more. No iperf3 — SC_NO_IPERF=1, no network —
-  --no-net.
+  Network traffic: iperf3 up to 5 GB (--full up to 30, --all up to 60) on a 1 Gbit/s port; on a faster port runs of
+  2 s (far points, ping above 150 ms, as usual) and the budget grows with the port — up to 15 / 100 / 200 GB, above it
+  rows are held, marked «≥». Your own budget — SC_NET_BUDGET_GB=N (0 — none; never below the minimum of the runs, ≈ 4.1
+  / 23.1 / 51.1 GB). Speedtest (--full, --all) — ≈ 2 GB more per Gbit/s of the port (≈ 20 GB at 10 Gbit/s).
+  No iperf3 — SC_NO_IPERF=1, no network — --no-net.
+  Scores — the Kaskad scale; the network channel above 1 Gbit/s — a curve of bench, lower than the Kaskad panel,
+  to 1000 at 10 Gbit/s (never above 1000).
   Environment: SC_LANG=ru|en, SC_FULL=1, SC_ALL=1, SC_JSON=1, SC_NO_NET=1, SC_NO_FETCH=1 (fetch nothing),
   SC_NO_IPERF=1, SC_NO_SPEEDTEST=1, SC_NET_BUDGET_GB=N, SC_ASCII=1, NO_COLOR=1.
 Installs nothing: missing iperf3, Speedtest, sysbench and fio go into its temporary directory only, removed at the end.
@@ -2772,7 +3069,7 @@ sc_main() {
             --ascii) SC_ASCII=1 ;;
             --no-color) color=0 ;;
             -h|--help) case "$SC_LANG" in ru|en) ;; *) SC_LANG=$SC_DEFAULT_LANG ;; esac; sc_usage; return 0 ;;
-            --version) echo "server-check $SC_VERSION (Kaskad scale $SC_SCALE_VERSION)"; return 0 ;;
+            --version) echo "server-check $SC_VERSION (scale $SC_SCALE_VERSION: Kaskad, own network curve above 1 Gbit/s)"; return 0 ;;
             *) echo "server-check: unknown option «$1» (--help)" >&2; return 2 ;;
         esac
         shift
@@ -2793,7 +3090,7 @@ sc_main() {
     declare -ga SP_ID=() SP_M=() SP_HOST=() SP_PORTS=() SP_PORT=() SP_CAP=() SP_CEN=() SP_CRU=() SP_OEN=() SP_ORU=() \
         SP_CITY=() SP_DOWN=() SP_UP=() SP_PING=() SP_DST=() SP_UST=() SP_DLB=() SP_ULB=() SP_MINRTT=() SP_RDOWN=() \
         SP_RUP=() SP_PAVG=() SP_PMED=() SP_PJIT=() SP_PLOSS=() SP_PSAMP=() SP_PN=() SP_REG=() SP_ALT=() SP_FB=() SC_RUNAS=() \
-        SC_SYSBENCH_CMD=() SC_FIO_CMD=()
+        SC_SYSBENCH_CMD=() SC_FIO_CMD=() SP_DSEC=() SP_USEC=()
     SPN=0; SC_HTTP=0
     SC_PROGRESS=0; [ -t 2 ] && SC_PROGRESS=1
     sc_screen_init "$color"
